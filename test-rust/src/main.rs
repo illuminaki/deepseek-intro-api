@@ -1,6 +1,6 @@
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::env;
+use std::process::Command;
 
 #[derive(Serialize)]
 struct Message {
@@ -30,8 +30,7 @@ struct MessageContent {
     content: String,
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = env::var("DEEPSEEK_API_KEY")
         .expect("DEEPSEEK_API_KEY no está configurada");
 
@@ -50,32 +49,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         stream: false,
     };
 
+    let payload = serde_json::to_string(&body)?;
     println!("[Rust] Enviando petición a DeepSeek API...");
-    println!("Payload: {}\n", serde_json::to_string(&body)?);
+    println!("Payload: {}\n", payload);
 
-    let client = Client::new();
-    let response = client
-        .post("https://api.deepseek.com/chat/completions")
-        .bearer_auth(&api_key)
-        .json(&body)
-        .send()
-        .await?;
+    let output = Command::new("curl")
+        .arg("-s")
+        .arg("-X")
+        .arg("POST")
+        .arg("https://api.deepseek.com/chat/completions")
+        .arg("-H")
+        .arg("Content-Type: application/json")
+        .arg("-H")
+        .arg(format!("Authorization: Bearer {}", api_key))
+        .arg("-d")
+        .arg(&payload)
+        .output()?;
 
-    let status = response.status();
-    println!("HTTP Status: {}", status);
-
-    if status.is_success() {
-        let data = response.json::<ChatResponse>().await?;
-        if !data.choices.is_empty() {
-            println!("✓ Respuesta exitosa:");
-            println!("{}", data.choices[0].message.content);
-        } else {
-            println!("✗ Respuesta inválida: choices vacío");
+    let response_text = String::from_utf8(output.stdout)?;
+    
+    if output.status.success() {
+        match serde_json::from_str::<ChatResponse>(&response_text) {
+            Ok(data) => {
+                if !data.choices.is_empty() {
+                    println!("HTTP Status: 200");
+                    println!("✓ Respuesta exitosa:");
+                    println!("{}", data.choices[0].message.content);
+                } else {
+                    println!("✗ Respuesta inválida: choices vacío");
+                    println!("{}", response_text);
+                }
+            }
+            Err(e) => {
+                println!("✗ Error al parsear JSON: {}", e);
+                println!("{}", response_text);
+            }
         }
     } else {
-        let text = response.text().await?;
-        println!("✗ Error HTTP:");
-        println!("{}", text);
+        println!("✗ Error en curl:");
+        println!("{}", response_text);
     }
 
     Ok(())
